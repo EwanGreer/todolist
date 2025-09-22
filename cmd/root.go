@@ -3,7 +3,9 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
@@ -18,6 +20,7 @@ type todo struct {
 	text      string
 	project   string
 	completed bool
+	createdAt int64
 }
 
 type App struct {
@@ -33,6 +36,13 @@ type App struct {
 	tw                   *taskwarrior.TaskWarrior
 	width                int
 	height               int
+}
+
+func sortTodosByCreatedAt(todos []todo) {
+	sort.Slice(todos, func(i, j int) bool {
+		// Most recent first (higher timestamp first)
+		return todos[i].createdAt > todos[j].createdAt
+	})
 }
 
 func NewApp() *App {
@@ -122,6 +132,7 @@ func loadTodosFromTaskwarrior(tw *taskwarrior.TaskWarrior) []todo {
 				text:      task.Description,
 				project:   project,
 				completed: false,
+				createdAt: task.Entry,
 			})
 		}
 	}
@@ -141,9 +152,13 @@ func loadTodosFromTaskwarrior(tw *taskwarrior.TaskWarrior) []todo {
 				text:      task.Description,
 				project:   project,
 				completed: true,
+				createdAt: task.Entry,
 			})
 		}
 	}
+
+	// Sort the combined list by creation date (most recent first)
+	sortTodosByCreatedAt(todos)
 
 	return todos
 }
@@ -297,7 +312,12 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		case "a":
-			newTodo := todo{text: "New todo item", completed: false, project: "default"}
+			newTodo := todo{
+				text:      "New todo item",
+				completed: false,
+				project:   "default",
+				createdAt: time.Now().Unix(),
+			}
 			// Save to Taskwarrior first to get UUID
 			if err := m.saveTodoToTaskwarrior(&newTodo); err != nil {
 				fmt.Printf("Error saving new task: %v\n", err)
@@ -389,6 +409,9 @@ func (m App) renderMainView() string {
 
 func (m *App) updateTable() {
 	filtered := m.getFilteredTodos()
+
+	// Sort filtered todos by creation date (most recent first)
+	sortTodosByCreatedAt(filtered)
 
 	rows := make([]table.Row, len(filtered))
 	for i, todo := range filtered {

@@ -14,7 +14,7 @@ type Task struct {
 	Description string
 	Project     string
 	Status      string
-	Entry       int64
+	Entry       int64 // NOTE: the time the task was created
 	Modified    int64
 	End         int64
 }
