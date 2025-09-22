@@ -53,11 +53,13 @@ func NewApp() *App {
 
 	rows := make([]table.Row, len(todos))
 	for i, todo := range todos {
-		status := "[ ]"
+		status := "○"
 		if todo.completed {
-			status = "[x]"
+			status = "●"
 		}
-		rows[i] = table.Row{status, todo.text, todo.project}
+		// Reverse the order so newest items appear first
+		reverseIndex := len(todos) - 1 - i
+		rows[reverseIndex] = table.Row{status, todo.text, todo.project}
 	}
 
 	t := table.New(
@@ -70,13 +72,20 @@ func NewApp() *App {
 	s := table.DefaultStyles()
 	s.Header = s.Header.
 		BorderStyle(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color("240")).
+		BorderForeground(lipgloss.Color("#6c7086")).
 		BorderBottom(true).
-		Bold(false)
+		Bold(true).
+		Foreground(lipgloss.Color("#fab387")).
+		PaddingLeft(1).
+		PaddingRight(1)
 	s.Selected = s.Selected.
-		Foreground(lipgloss.Color("229")).
-		Background(lipgloss.Color("57")).
-		Bold(false)
+		Foreground(lipgloss.Color("#1e1e2e")).
+		Background(lipgloss.Color("#f38ba8")).
+		Bold(true)
+	s.Cell = s.Cell.
+		Foreground(lipgloss.Color("#cdd6f4")).
+		PaddingLeft(1).
+		PaddingRight(1)
 	t.SetStyles(s)
 
 	return &App{
@@ -241,7 +250,9 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if len(filtered) > 0 {
 				cursor := m.table.Cursor()
 				if cursor < len(filtered) {
-					targetTodo := filtered[cursor]
+					// Account for reversed display order
+					reversedIndex := len(filtered) - 1 - cursor
+					targetTodo := filtered[reversedIndex]
 					for i := range m.todos {
 						if m.todos[i].uuid == targetTodo.uuid || (m.todos[i].text == targetTodo.text && m.todos[i].project == targetTodo.project) {
 							m.todos[i].completed = !m.todos[i].completed
@@ -260,7 +271,9 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if len(filtered) > 0 {
 				cursor := m.table.Cursor()
 				if cursor < len(filtered) {
-					targetTodo := filtered[cursor]
+					// Account for reversed display order
+					reversedIndex := len(filtered) - 1 - cursor
+					targetTodo := filtered[reversedIndex]
 					for i := range m.todos {
 						if m.todos[i].uuid == targetTodo.uuid || (m.todos[i].text == targetTodo.text && m.todos[i].project == targetTodo.project) {
 							// Delete from Taskwarrior
@@ -312,8 +325,6 @@ func (m App) View() string {
 			lipgloss.Width(baseView), lipgloss.Height(baseView),
 			lipgloss.Center, lipgloss.Center,
 			overlay,
-			lipgloss.WithWhitespaceChars(" "),
-			lipgloss.WithWhitespaceForeground(lipgloss.Color("238")),
 		)
 	}
 
@@ -322,8 +333,9 @@ func (m App) View() string {
 
 func (m App) renderMainView() string {
 	baseStyle := lipgloss.NewStyle().
-		BorderStyle(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color("240"))
+		BorderStyle(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("#6c7086")).
+		Padding(0, 1)
 
 	filterInfo := fmt.Sprintf("Filter: %s", m.currentFilter)
 	if m.currentFilter == "all" {
@@ -342,24 +354,50 @@ func (m App) renderMainView() string {
 		headerInfo += " • " + searchInfo
 	}
 
+	headerStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#fab387")).
+		Bold(true).
+		Margin(0, 0, 1, 0)
+
 	helpText := "q: quit • ↑/↓: navigate • space/enter: toggle • a: add • d: delete • f: filter • F: prev filter • /: search • esc: clear search"
 
-	return lipgloss.NewStyle().Margin(0, 0, 1, 0).Render(headerInfo) + "\n" +
+	helpStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#6c7086")).
+		Margin(1, 0)
+
+	return headerStyle.Render(headerInfo) + "\n" +
 		baseStyle.Render(m.table.View()) + "\n" +
-		lipgloss.NewStyle().Margin(1, 0).Render(helpText)
+		helpStyle.Render(helpText)
 }
+
 
 func (m *App) updateTable() {
 	filtered := m.getFilteredTodos()
 	rows := make([]table.Row, len(filtered))
+
+	// Reverse the order so newest items appear first
 	for i, todo := range filtered {
-		status := "[ ]"
+		status := "○"
 		if todo.completed {
-			status = "[x]"
+			status = "●"
 		}
-		rows[i] = table.Row{status, todo.text, todo.project}
+		reverseIndex := len(filtered) - 1 - i
+		rows[reverseIndex] = table.Row{status, todo.text, todo.project}
 	}
+
+	// Preserve cursor position and focus state
+	currentCursor := m.table.Cursor()
 	m.table.SetRows(rows)
+	m.table.Focus()
+
+	// Ensure cursor is within bounds after updating rows
+	if len(rows) > 0 {
+		if currentCursor >= len(rows) {
+			m.table.SetCursor(len(rows) - 1)
+		} else if currentCursor >= 0 {
+			m.table.SetCursor(currentCursor)
+		}
+	}
 }
 
 func getUniqueProjects(todos []todo) []string {
@@ -432,7 +470,7 @@ func (m *App) renderProjectSelection() string {
 	for i, project := range m.projects {
 		cursor := "  "
 		if i == m.projectCursor {
-			cursor = "> "
+			cursor = "❯ "
 		}
 
 		selected := " "
@@ -445,18 +483,32 @@ func (m *App) renderProjectSelection() string {
 			displayName = "all projects"
 		}
 
-		items = append(items, fmt.Sprintf("%s[%s] %s", cursor, selected, displayName))
+		line := fmt.Sprintf("%s[%s] %s", cursor, selected, displayName)
+		if i == m.projectCursor {
+			line = lipgloss.NewStyle().Foreground(lipgloss.Color("#cba6f7")).Bold(true).Render(line)
+		}
+
+		items = append(items, line)
 	}
 
 	content := strings.Join(items, "\n")
 
+	title := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#fab387")).
+		Bold(true).
+		Render("Select Project Filter:")
+
+	instructions := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#6c7086")).
+		Render("Press enter to select, esc to cancel")
+
 	style := lipgloss.NewStyle().
 		BorderStyle(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("62")).
+		BorderForeground(lipgloss.Color("#cba6f7")).
 		Padding(1, 2).
-		Width(30)
+		Width(35)
 
-	return style.Render("Select Project Filter:\n\n" + content + "\n\nPress enter to select, esc to cancel")
+	return style.Render(title + "\n\n" + content + "\n\n" + instructions)
 }
 
 var rootCmd = &cobra.Command{
@@ -482,4 +534,3 @@ func Execute() {
 func init() {
 	rootCmd.CompletionOptions.DisableDefaultCmd = true
 }
-
