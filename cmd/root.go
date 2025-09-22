@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -36,6 +37,8 @@ type App struct {
 	tw                   *taskwarrior.TaskWarrior
 	width                int
 	height               int
+	addMode              bool
+	addText              string
 }
 
 func sortTodosByCreatedAt(todos []todo) {
@@ -43,6 +46,23 @@ func sortTodosByCreatedAt(todos []todo) {
 		// Most recent first (higher timestamp first)
 		return todos[i].createdAt > todos[j].createdAt
 	})
+}
+
+func parseTaskWarriorInput(input string) (description string, project string) {
+	// Look for project: pattern
+	projectRegex := regexp.MustCompile(`project:(\w+)`)
+	projectMatch := projectRegex.FindStringSubmatch(input)
+
+	if len(projectMatch) > 1 {
+		project = projectMatch[1]
+		// Remove the project: part from the description
+		description = strings.TrimSpace(projectRegex.ReplaceAllString(input, ""))
+	} else {
+		description = strings.TrimSpace(input)
+		project = "default"
+	}
+
+	return description, project
 }
 
 func NewApp() *App {
@@ -111,6 +131,8 @@ func NewApp() *App {
 		tw:                   tw,
 		width:                80,
 		height:               24,
+		addMode:              false,
+		addText:              "",
 	}
 }
 
@@ -203,6 +225,53 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		return m, nil
 	case tea.KeyMsg:
+		if m.addMode {
+			switch msg.String() {
+			case "enter":
+				if strings.TrimSpace(m.addText) != "" {
+					// Parse the input using TaskWarrior syntax
+					description, project := parseTaskWarriorInput(m.addText)
+
+					newTodo := todo{
+						text:      description,
+						completed: false,
+						project:   project,
+						createdAt: time.Now().Unix(),
+					}
+
+					// Save to TaskWarrior
+					if err := m.saveTodoToTaskwarrior(&newTodo); err != nil {
+						fmt.Printf("Error saving new task: %v\n", err)
+					} else {
+						// Reload todos from Taskwarrior to ensure consistency
+						m.reloadTodos()
+						m.updateTable()
+					}
+				}
+
+				// Exit add mode
+				m.addMode = false
+				m.addText = ""
+				return m, nil
+			case "esc":
+				m.addMode = false
+				m.addText = ""
+				return m, nil
+			case "backspace":
+				if len(m.addText) > 0 {
+					m.addText = m.addText[:len(m.addText)-1]
+				}
+				return m, nil
+			case "ctrl+c", "q":
+				return m, tea.Quit
+			default:
+				if len(msg.String()) == 1 {
+					m.addText += msg.String()
+				}
+				return m, nil
+			}
+		}
+
 		if m.projectSelectionMode {
 			switch msg.String() {
 			case "up", "k":
@@ -312,20 +381,8 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		case "a":
-			newTodo := todo{
-				text:      "New todo item",
-				completed: false,
-				project:   "default",
-				createdAt: time.Now().Unix(),
-			}
-			// Save to Taskwarrior first to get UUID
-			if err := m.saveTodoToTaskwarrior(&newTodo); err != nil {
-				fmt.Printf("Error saving new task: %v\n", err)
-			} else {
-				// Reload todos from Taskwarrior to ensure consistency
-				m.reloadTodos()
-				m.updateTable()
-			}
+			m.addMode = true
+			m.addText = ""
 		case "f":
 			for i, project := range m.projects {
 				if project == m.currentFilter {
@@ -356,6 +413,17 @@ func (m App) View() string {
 
 	if m.projectSelectionMode {
 		overlay := m.renderProjectSelection()
+
+		// Place the overlay on top of the centered main view
+		return lipgloss.Place(
+			m.width, m.height,
+			lipgloss.Center, lipgloss.Center,
+			overlay,
+		)
+	}
+
+	if m.addMode {
+		overlay := m.renderAddForm()
 
 		// Place the overlay on top of the centered main view
 		return lipgloss.Place(
@@ -396,7 +464,7 @@ func (m App) renderMainView() string {
 		Bold(true).
 		Margin(0, 0, 1, 0)
 
-	helpText := "q: quit • ↑/↓: navigate • space/enter: toggle • a: add • d: delete • f: filter • F: prev filter • /: search • esc: clear search"
+	helpText := "q: quit • ↑/↓: navigate • space/enter: toggle • a: add task • d: delete • f: filter • F: prev filter • /: search • esc: clear search"
 
 	helpStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#6c7086")).
@@ -562,6 +630,43 @@ func (m *App) renderProjectSelection() string {
 		Width(35)
 
 	return style.Render(title + "\n\n" + content + "\n\n" + instructions)
+}
+
+func (m *App) renderAddForm() string {
+	title := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#fab387")).
+		Bold(true).
+		Render("Add New Task")
+
+	// Input field
+	inputStyle := lipgloss.NewStyle().
+		BorderStyle(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("#fab387")).
+		Padding(0, 1).
+		Width(50)
+
+	inputContent := m.addText + "_"
+	inputField := inputStyle.Render(inputContent)
+
+	// Instructions
+	instructions := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#6c7086")).
+		Render("Enter task description (use project:name for projects) • enter to save • esc to cancel")
+
+	// Examples
+	examples := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#6c7086")).
+		Italic(true).
+		Render("Examples: \"Fix the bug\" or \"Write tests project:myapp\"")
+
+	// Main container
+	style := lipgloss.NewStyle().
+		BorderStyle(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("#6c7086")).
+		Padding(1, 2).
+		Width(60)
+
+	return style.Render(title + "\n\n" + inputField + "\n\n" + instructions + "\n\n" + examples)
 }
 
 var rootCmd = &cobra.Command{
