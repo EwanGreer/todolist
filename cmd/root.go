@@ -43,19 +43,16 @@ type App struct {
 
 func sortTodosByCreatedAt(todos []todo) {
 	sort.Slice(todos, func(i, j int) bool {
-		// Most recent first (higher timestamp first)
 		return todos[i].createdAt > todos[j].createdAt
 	})
 }
 
 func parseTaskWarriorInput(input string) (description string, project string) {
-	// Look for project: pattern
 	projectRegex := regexp.MustCompile(`project:(\w+)`)
 	projectMatch := projectRegex.FindStringSubmatch(input)
 
 	if len(projectMatch) > 1 {
 		project = projectMatch[1]
-		// Remove the project: part from the description
 		description = strings.TrimSpace(projectRegex.ReplaceAllString(input, ""))
 	} else {
 		description = strings.TrimSpace(input)
@@ -229,7 +226,6 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch msg.String() {
 			case "enter":
 				if strings.TrimSpace(m.addText) != "" {
-					// Parse the input using TaskWarrior syntax
 					description, project := parseTaskWarriorInput(m.addText)
 
 					newTodo := todo{
@@ -239,11 +235,9 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						createdAt: time.Now().Unix(),
 					}
 
-					// Save to TaskWarrior
 					if err := m.saveTodoToTaskwarrior(&newTodo); err != nil {
 						fmt.Printf("Error saving new task: %v\n", err)
 					} else {
-						// Reload todos from Taskwarrior to ensure consistency
 						m.reloadTodos()
 						m.updateTable()
 					}
@@ -404,7 +398,6 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m App) View() string {
 	mainView := m.renderMainView()
 
-	// Always center the main view
 	centeredMainView := lipgloss.Place(
 		m.width, m.height,
 		lipgloss.Center, lipgloss.Center,
@@ -414,7 +407,6 @@ func (m App) View() string {
 	if m.projectSelectionMode {
 		overlay := m.renderProjectSelection()
 
-		// Place the overlay on top of the centered main view
 		return lipgloss.Place(
 			m.width, m.height,
 			lipgloss.Center, lipgloss.Center,
@@ -425,7 +417,6 @@ func (m App) View() string {
 	if m.addMode {
 		overlay := m.renderAddForm()
 
-		// Place the overlay on top of the centered main view
 		return lipgloss.Place(
 			m.width, m.height,
 			lipgloss.Center, lipgloss.Center,
