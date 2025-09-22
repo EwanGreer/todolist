@@ -9,9 +9,12 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
+
+	"github.com/EwanGreer/todolist/taskwarrior"
 )
 
 type todo struct {
+	uuid      string
 	text      string
 	project   string
 	completed bool
@@ -27,14 +30,17 @@ type App struct {
 	searchText           string
 	projectSelectionMode bool
 	projectCursor        int
+	tw                   *taskwarrior.TaskWarrior
 }
 
 func NewApp() *App {
-	todos := []todo{
-		{text: "Buy groceries", completed: false, project: "life"},
-		{text: "Walk the dog", completed: false, project: "life"},
-		{text: "Write some code", completed: false, project: "programming"},
+	tw, err := taskwarrior.New()
+	if err != nil {
+		fmt.Printf("Error initializing Taskwarrior: %v\n", err)
+		os.Exit(1)
 	}
+
+	todos := loadTodosFromTaskwarrior(tw)
 
 	projects := getUniqueProjects(todos)
 	projects = append([]string{"all"}, projects...)
@@ -83,7 +89,80 @@ func NewApp() *App {
 		searchText:           "",
 		projectSelectionMode: false,
 		projectCursor:        0,
+		tw:                   tw,
 	}
+}
+
+func loadTodosFromTaskwarrior(tw *taskwarrior.TaskWarrior) []todo {
+	var todos []todo
+
+	// Load pending tasks
+	pendingTasks, err := tw.LoadPendingTasks()
+	if err != nil {
+		fmt.Printf("Warning: Could not load pending tasks: %v\n", err)
+	} else {
+		for _, task := range pendingTasks {
+			todos = append(todos, todo{
+				uuid:      task.UUID,
+				text:      task.Description,
+				project:   task.Project,
+				completed: false,
+			})
+		}
+	}
+
+	// Load completed tasks
+	completedTasks, err := tw.LoadCompletedTasks()
+	if err != nil {
+		fmt.Printf("Warning: Could not load completed tasks: %v\n", err)
+	} else {
+		for _, task := range completedTasks {
+			todos = append(todos, todo{
+				uuid:      task.UUID,
+				text:      task.Description,
+				project:   task.Project,
+				completed: true,
+			})
+		}
+	}
+
+	// If no todos loaded, provide defaults
+	if len(todos) == 0 {
+		todos = []todo{
+			{text: "Buy groceries", completed: false, project: "life"},
+			{text: "Walk the dog", completed: false, project: "life"},
+			{text: "Write some code", completed: false, project: "programming"},
+		}
+	}
+
+	return todos
+}
+
+func (m *App) saveTodoToTaskwarrior(t *todo) error {
+	task := &taskwarrior.Task{
+		UUID:        t.uuid,
+		Description: t.text,
+		Project:     t.project,
+		Status:      "pending",
+	}
+
+	if t.completed {
+		task.Status = "completed"
+	}
+
+	err := m.tw.SaveTask(task)
+	if err == nil && t.uuid == "" {
+		// Update the todo with the generated UUID
+		t.uuid = task.UUID
+	}
+	return err
+}
+
+func (m *App) deleteTodoFromTaskwarrior(t todo) error {
+	if t.uuid == "" {
+		return nil // Can't delete without UUID
+	}
+	return m.tw.DeleteTask(t.uuid)
 }
 
 func (m *App) Init() tea.Cmd {
@@ -164,8 +243,12 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if cursor < len(filtered) {
 					targetTodo := filtered[cursor]
 					for i := range m.todos {
-						if m.todos[i].text == targetTodo.text && m.todos[i].project == targetTodo.project {
+						if m.todos[i].uuid == targetTodo.uuid || (m.todos[i].text == targetTodo.text && m.todos[i].project == targetTodo.project) {
 							m.todos[i].completed = !m.todos[i].completed
+							// Save to Taskwarrior
+							if err := m.saveTodoToTaskwarrior(&m.todos[i]); err != nil {
+								fmt.Printf("Error saving task: %v\n", err)
+							}
 							break
 						}
 					}
@@ -179,7 +262,11 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if cursor < len(filtered) {
 					targetTodo := filtered[cursor]
 					for i := range m.todos {
-						if m.todos[i].text == targetTodo.text && m.todos[i].project == targetTodo.project {
+						if m.todos[i].uuid == targetTodo.uuid || (m.todos[i].text == targetTodo.text && m.todos[i].project == targetTodo.project) {
+							// Delete from Taskwarrior
+							if err := m.deleteTodoFromTaskwarrior(m.todos[i]); err != nil {
+								fmt.Printf("Error deleting task: %v\n", err)
+							}
 							m.todos = append(m.todos[:i], m.todos[i+1:]...)
 							break
 						}
@@ -190,9 +277,14 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "a":
 			newTodo := todo{text: "New todo item", completed: false, project: "default"}
-			m.todos = append(m.todos, newTodo)
-			m.updateProjects()
-			m.updateTable()
+			// Save to Taskwarrior first to get UUID
+			if err := m.saveTodoToTaskwarrior(&newTodo); err != nil {
+				fmt.Printf("Error saving new task: %v\n", err)
+			} else {
+				m.todos = append(m.todos, newTodo)
+				m.updateProjects()
+				m.updateTable()
+			}
 		case "f":
 			for i, project := range m.projects {
 				if project == m.currentFilter {
@@ -390,3 +482,4 @@ func Execute() {
 func init() {
 	rootCmd.CompletionOptions.DisableDefaultCmd = true
 }
+
