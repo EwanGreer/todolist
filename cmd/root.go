@@ -57,9 +57,7 @@ func NewApp() *App {
 		if todo.completed {
 			status = "●"
 		}
-		// Reverse the order so newest items appear first
-		reverseIndex := len(todos) - 1 - i
-		rows[reverseIndex] = table.Row{status, todo.text, todo.project}
+		rows[i] = table.Row{status, todo.text, todo.project}
 	}
 
 	t := table.New(
@@ -111,10 +109,14 @@ func loadTodosFromTaskwarrior(tw *taskwarrior.TaskWarrior) []todo {
 		fmt.Printf("Warning: Could not load pending tasks: %v\n", err)
 	} else {
 		for _, task := range pendingTasks {
+			project := task.Project
+			if project == "" {
+				project = "default"
+			}
 			todos = append(todos, todo{
 				uuid:      task.UUID,
 				text:      task.Description,
-				project:   task.Project,
+				project:   project,
 				completed: false,
 			})
 		}
@@ -126,21 +128,16 @@ func loadTodosFromTaskwarrior(tw *taskwarrior.TaskWarrior) []todo {
 		fmt.Printf("Warning: Could not load completed tasks: %v\n", err)
 	} else {
 		for _, task := range completedTasks {
+			project := task.Project
+			if project == "" {
+				project = "default"
+			}
 			todos = append(todos, todo{
 				uuid:      task.UUID,
 				text:      task.Description,
-				project:   task.Project,
+				project:   project,
 				completed: true,
 			})
-		}
-	}
-
-	// If no todos loaded, provide defaults
-	if len(todos) == 0 {
-		todos = []todo{
-			{text: "Buy groceries", completed: false, project: "life"},
-			{text: "Walk the dog", completed: false, project: "life"},
-			{text: "Write some code", completed: false, project: "programming"},
 		}
 	}
 
@@ -250,16 +247,20 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if len(filtered) > 0 {
 				cursor := m.table.Cursor()
 				if cursor < len(filtered) {
-					// Account for reversed display order
-					reversedIndex := len(filtered) - 1 - cursor
-					targetTodo := filtered[reversedIndex]
+					targetTodo := filtered[cursor]
 					for i := range m.todos {
-						if m.todos[i].uuid == targetTodo.uuid || (m.todos[i].text == targetTodo.text && m.todos[i].project == targetTodo.project) {
+						if m.todos[i].uuid == targetTodo.uuid || (m.todos[i].uuid == "" && m.todos[i].text == targetTodo.text && m.todos[i].project == targetTodo.project) {
+							// Toggle completion status
+							originalStatus := m.todos[i].completed
 							m.todos[i].completed = !m.todos[i].completed
+
 							// Save to Taskwarrior
 							if err := m.saveTodoToTaskwarrior(&m.todos[i]); err != nil {
 								fmt.Printf("Error saving task: %v\n", err)
+								// Revert the change if save failed
+								m.todos[i].completed = originalStatus
 							}
+							// Don't reload - just update the table with current state
 							break
 						}
 					}
@@ -271,20 +272,19 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if len(filtered) > 0 {
 				cursor := m.table.Cursor()
 				if cursor < len(filtered) {
-					// Account for reversed display order
-					reversedIndex := len(filtered) - 1 - cursor
-					targetTodo := filtered[reversedIndex]
+					targetTodo := filtered[cursor]
 					for i := range m.todos {
-						if m.todos[i].uuid == targetTodo.uuid || (m.todos[i].text == targetTodo.text && m.todos[i].project == targetTodo.project) {
+						if m.todos[i].uuid == targetTodo.uuid || (m.todos[i].uuid == "" && m.todos[i].text == targetTodo.text && m.todos[i].project == targetTodo.project) {
 							// Delete from Taskwarrior
 							if err := m.deleteTodoFromTaskwarrior(m.todos[i]); err != nil {
 								fmt.Printf("Error deleting task: %v\n", err)
+							} else {
+								// Reload todos from Taskwarrior to ensure consistency
+								m.reloadTodos()
 							}
-							m.todos = append(m.todos[:i], m.todos[i+1:]...)
 							break
 						}
 					}
-					m.updateProjects()
 					m.updateTable()
 				}
 			}
@@ -294,8 +294,8 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if err := m.saveTodoToTaskwarrior(&newTodo); err != nil {
 				fmt.Printf("Error saving new task: %v\n", err)
 			} else {
-				m.todos = append(m.todos, newTodo)
-				m.updateProjects()
+				// Reload todos from Taskwarrior to ensure consistency
+				m.reloadTodos()
 				m.updateTable()
 			}
 		case "f":
@@ -370,33 +370,37 @@ func (m App) renderMainView() string {
 		helpStyle.Render(helpText)
 }
 
-
 func (m *App) updateTable() {
 	filtered := m.getFilteredTodos()
-	rows := make([]table.Row, len(filtered))
 
-	// Reverse the order so newest items appear first
+	rows := make([]table.Row, len(filtered))
 	for i, todo := range filtered {
 		status := "○"
 		if todo.completed {
 			status = "●"
 		}
-		reverseIndex := len(filtered) - 1 - i
-		rows[reverseIndex] = table.Row{status, todo.text, todo.project}
+		rows[i] = table.Row{status, todo.text, todo.project}
 	}
 
 	// Preserve cursor position and focus state
 	currentCursor := m.table.Cursor()
 	m.table.SetRows(rows)
+
+	// Always maintain focus
 	m.table.Focus()
 
 	// Ensure cursor is within bounds after updating rows
 	if len(rows) > 0 {
 		if currentCursor >= len(rows) {
 			m.table.SetCursor(len(rows) - 1)
-		} else if currentCursor >= 0 {
+		} else if currentCursor < 0 {
+			m.table.SetCursor(0)
+		} else {
 			m.table.SetCursor(currentCursor)
 		}
+	} else {
+		// No rows, reset cursor
+		m.table.SetCursor(0)
 	}
 }
 
@@ -441,6 +445,11 @@ func (m *App) getFilteredTodos() []todo {
 func (m *App) updateProjects() {
 	m.projects = getUniqueProjects(m.todos)
 	m.projects = append([]string{"all"}, m.projects...)
+}
+
+func (m *App) reloadTodos() {
+	m.todos = loadTodosFromTaskwarrior(m.tw)
+	m.updateProjects()
 }
 
 func (m *App) nextFilter() {
