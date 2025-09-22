@@ -14,7 +14,7 @@ type Task struct {
 	Description string
 	Project     string
 	Status      string
-	Entry       int64 // NOTE: the time the task was created
+	Entry       int64
 	Modified    int64
 	End         int64
 }
@@ -50,9 +50,7 @@ func (tw *TaskWarrior) loadTasksFromCommand(filter string) ([]*Task, error) {
 	cmd := exec.Command("task", "rc.data.location="+tw.dataDir, filter, "export")
 	output, err := cmd.Output()
 	if err != nil {
-		// Check if taskwarrior is installed and database exists
 		if exitError, ok := err.(*exec.ExitError); ok {
-			// If exit code is 1, it might just mean no tasks match the filter
 			if exitError.ExitCode() == 1 {
 				return []*Task{}, nil
 			}
@@ -60,14 +58,13 @@ func (tw *TaskWarrior) loadTasksFromCommand(filter string) ([]*Task, error) {
 		return []*Task{}, nil
 	}
 
-	// Handle empty output (no tasks)
 	if len(output) == 0 || string(output) == "[]\n" || string(output) == "[]" {
 		return []*Task{}, nil
 	}
 
 	var taskData []map[string]any
 	if err := json.Unmarshal(output, &taskData); err != nil {
-		return []*Task{}, nil // Return empty slice instead of error for robustness
+		return []*Task{}, nil
 	}
 
 	var tasks []*Task
@@ -116,7 +113,6 @@ func (tw *TaskWarrior) saveTaskWithCommand(task *Task) error {
 	var cmd *exec.Cmd
 
 	if task.UUID == "" {
-		// Create new task
 		args := []string{"rc.data.location=" + tw.dataDir, "rc.confirmation=off", "add"}
 		if task.Project != "" && task.Project != "default" {
 			args = append(args, "project:"+task.Project)
@@ -136,7 +132,6 @@ func (tw *TaskWarrior) saveTaskWithCommand(task *Task) error {
 			task.UUID = matches[1]
 		}
 	} else {
-		// Update existing task
 		args := []string{"rc.data.location=" + tw.dataDir, "rc.confirmation=off", task.UUID, "modify"}
 		if task.Project != "" && task.Project != "default" {
 			args = append(args, "project:"+task.Project)
@@ -149,17 +144,15 @@ func (tw *TaskWarrior) saveTaskWithCommand(task *Task) error {
 		}
 	}
 
-	// Handle status changes separately for better error handling
-	if task.Status == "completed" {
+	switch task.Status {
+	case "completed":
 		cmd = exec.Command("task", "rc.data.location="+tw.dataDir, "rc.confirmation=off", task.UUID, "done")
 		if _, err := cmd.Output(); err != nil {
 			return err
 		}
-	} else if task.Status == "pending" {
-		// Check if task is currently completed and needs to be reopened
+	case "pending":
 		currentTasks, err := tw.loadTasksFromCommand("uuid:" + task.UUID)
 		if err == nil && len(currentTasks) > 0 && currentTasks[0].Status == "completed" {
-			// Reopen the completed task
 			cmd = exec.Command("task", "rc.data.location="+tw.dataDir, "rc.confirmation=off", task.UUID, "modify", "status:pending")
 			if _, err := cmd.Output(); err != nil {
 				return err
