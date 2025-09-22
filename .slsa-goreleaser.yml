@@ -1,7 +1,0 @@
-version: 1
-
-# The OS to compile for. `GOOS` env variable will be set to this value.
-goos: linux
-
-# The architecture to compile for. `GOARCH` env variable will be set to this value.
-goarch: amd64
