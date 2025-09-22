@@ -53,9 +53,9 @@ func NewApp() *App {
 
 	rows := make([]table.Row, len(todos))
 	for i, todo := range todos {
-		status := "○"
+		status := "[ ]"
 		if todo.completed {
-			status = "●"
+			status = "[✓]"
 		}
 		rows[i] = table.Row{status, todo.text, todo.project}
 	}
@@ -375,9 +375,9 @@ func (m *App) updateTable() {
 
 	rows := make([]table.Row, len(filtered))
 	for i, todo := range filtered {
-		status := "○"
+		status := "[ ]"
 		if todo.completed {
-			status = "●"
+			status = "[✓]"
 		}
 		rows[i] = table.Row{status, todo.text, todo.project}
 	}
