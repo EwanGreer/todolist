@@ -31,6 +31,8 @@ type App struct {
 	projectSelectionMode bool
 	projectCursor        int
 	tw                   *taskwarrior.TaskWarrior
+	width                int
+	height               int
 }
 
 func NewApp() *App {
@@ -97,6 +99,8 @@ func NewApp() *App {
 		projectSelectionMode: false,
 		projectCursor:        0,
 		tw:                   tw,
+		width:                80,
+		height:               24,
 	}
 }
 
@@ -179,6 +183,10 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		return m, nil
 	case tea.KeyMsg:
 		if m.projectSelectionMode {
 			switch msg.String() {
@@ -317,18 +325,27 @@ func (m *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m App) View() string {
+	mainView := m.renderMainView()
+
+	// Always center the main view
+	centeredMainView := lipgloss.Place(
+		m.width, m.height,
+		lipgloss.Center, lipgloss.Center,
+		mainView,
+	)
+
 	if m.projectSelectionMode {
-		baseView := m.renderMainView()
 		overlay := m.renderProjectSelection()
 
+		// Place the overlay on top of the centered main view
 		return lipgloss.Place(
-			lipgloss.Width(baseView), lipgloss.Height(baseView),
+			m.width, m.height,
 			lipgloss.Center, lipgloss.Center,
 			overlay,
 		)
 	}
 
-	return m.renderMainView()
+	return centeredMainView
 }
 
 func (m App) renderMainView() string {
@@ -494,7 +511,11 @@ func (m *App) renderProjectSelection() string {
 
 		line := fmt.Sprintf("%s[%s] %s", cursor, selected, displayName)
 		if i == m.projectCursor {
-			line = lipgloss.NewStyle().Foreground(lipgloss.Color("#cba6f7")).Bold(true).Render(line)
+			line = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#1e1e2e")).
+				Background(lipgloss.Color("#f38ba8")).
+				Bold(true).
+				Render(line)
 		}
 
 		items = append(items, line)
@@ -513,7 +534,7 @@ func (m *App) renderProjectSelection() string {
 
 	style := lipgloss.NewStyle().
 		BorderStyle(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#cba6f7")).
+		BorderForeground(lipgloss.Color("#6c7086")).
 		Padding(1, 2).
 		Width(35)
 
